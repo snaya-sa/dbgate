@@ -123,6 +123,14 @@ function killConnectionSubprocess(conid) {
   } catch (err) {
     logger.error(extractErrorLogData(err), 'DBGM-00000 Error closing database connection for handoff session');
   }
+  try {
+    const sessions = require('../controllers/sessions');
+    if (typeof sessions.closeForConid === 'function') {
+      sessions.closeForConid(conid);
+    }
+  } catch (err) {
+    logger.error(extractErrorLogData(err), 'DBGM-00000 Error closing SQL sessions for handoff session');
+  }
 }
 
 function sweep() {

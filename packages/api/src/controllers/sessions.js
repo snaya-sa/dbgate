@@ -303,6 +303,20 @@ module.exports = {
   //   return { state: 'ok' };
   // },
 
+  // Kill all SQL sessions opened for a connection. Used when a handoff session is
+  // revoked or expires so a still-valid token cannot keep querying the old
+  // subprocess. Killing triggers the 'exit' handler, which removes it from opened.
+  closeForConid(conid) {
+    for (const session of this.opened.filter(x => x.conid == conid)) {
+      try {
+        session.subprocess.kill();
+      } catch (err) {
+        logger.error(extractErrorLogData(err), 'DBGM-00000 Error killing session subprocess on revoke');
+      }
+    }
+    this.opened = this.opened.filter(x => x.conid != conid);
+  },
+
   kill_meta: true,
   async kill({ sesid }) {
     const session = this.opened.find(x => x.sesid == sesid);

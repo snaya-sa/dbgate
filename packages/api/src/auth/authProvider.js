@@ -72,6 +72,22 @@ class AuthProviderBase {
   }
 
   async getCurrentDatabasePermissions(req) {
+    // Handoff session: in STORAGE_DATABASE mode the SQL editor path checks the
+    // run_script database role. Grant it for the session's own conid+database so
+    // queries work; writes remain blocked by the read-only DB session (isReadOnly),
+    // not by the role. Scoped to the single token database so other databases on
+    // the same connection are not reachable. (No-op outside STORAGE_DATABASE mode.)
+    const conid = req?.user?.conid ?? req?.auth?.conid;
+    if (conid) {
+      const database = req?.user?.database ?? req?.auth?.database;
+      return [
+        {
+          connection_conid: conid,
+          database_names_list: database,
+          database_permission_role_id: -4, // run_script
+        },
+      ];
+    }
     return [];
   }
 
