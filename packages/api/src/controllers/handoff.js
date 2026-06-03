@@ -37,6 +37,20 @@ const HANDOFF_ALLOWED_ROUTE_PREFIXES = [
   '/__health',
 ];
 
+// Actions reachable under an allowed prefix that a read-only DB-browse session
+// must NOT reach. Native backup/restore spawn external tools (pg_dump / psql /
+// mysqldump / mysql) as separate processes using the session credentials; they
+// bypass the read-only DB session entirely, so restore can write to the database
+// and backup can write files into the server's storage directory. The read-only
+// guarantee does not cover them, so deny them outright. Checked before the
+// allowlist below.
+const HANDOFF_DENIED_ROUTE_EXACT = [
+  '/database-connections/native-backup',
+  '/database-connections/native-backup-command',
+  '/database-connections/native-restore',
+  '/database-connections/native-restore-command',
+];
+
 // Mixed controllers: allow ONLY these specific read actions. Their other actions
 // write to shared server storage/files with no handoff-aware permission check
 // (connections/save writes the datastore; jsldata/save-text|save-rows write
@@ -83,6 +97,12 @@ function handoffRouteGuard(req, res, next) {
   const conid = req?.user?.conid ?? req?.auth?.conid;
   if (!conid) {
     return next();
+  }
+  // Deny dangerous actions that live under an otherwise-allowed prefix first.
+  const denied = HANDOFF_DENIED_ROUTE_EXACT.some(action => req.path === getExpressPath(action));
+  if (denied) {
+    logger.warn({ path: req.path }, 'DBGM-00000 Blocked route for handoff session');
+    return res.status(403).json({ error: 'Not allowed for handoff session' });
   }
   const allowedByPrefix = HANDOFF_ALLOWED_ROUTE_PREFIXES.some(prefix => {
     const full = getExpressPath(prefix);

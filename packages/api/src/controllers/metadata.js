@@ -1,6 +1,7 @@
 const _ = require('lodash');
 const fp = require('lodash/fp');
 const databaseConnections = require('./databaseConnections');
+const { testConnectionPermission } = require('../utility/hasPermission');
 
 function pickObjectNames(array) {
   return _.sortBy(array, x => `${x.schemaName}.${x.pureName}`).map(fp.pick(['pureName', 'schemaName']));
@@ -15,7 +16,8 @@ module.exports = {
   // },
 
   listObjects_meta: true,
-  async listObjects({ conid, database }) {
+  async listObjects({ conid, database }, req) {
+    await testConnectionPermission(conid, req);
     const opened = await databaseConnections.ensureOpened(conid, database);
     const types = ['tables', 'collections', 'views', 'procedures', 'functions', 'triggers'];
     return types.reduce(
@@ -28,7 +30,8 @@ module.exports = {
   },
 
   tableInfo_meta: true,
-  async tableInfo({ conid, database, schemaName, pureName }) {
+  async tableInfo({ conid, database, schemaName, pureName }, req) {
+    await testConnectionPermission(conid, req);
     const opened = await databaseConnections.ensureOpened(conid, database);
     const table = opened.structure.tables.find(x => x.pureName == pureName && x.schemaName == schemaName);
     const allForeignKeys = _.flatten(opened.structure.tables.map(x => x.foreignKeys));
@@ -39,7 +42,8 @@ module.exports = {
   },
 
   sqlObjectInfo_meta: true,
-  async sqlObjectInfo({ objectTypeField, conid, database, schemaName, pureName }) {
+  async sqlObjectInfo({ objectTypeField, conid, database, schemaName, pureName }, req) {
+    await testConnectionPermission(conid, req);
     const opened = await databaseConnections.ensureOpened(conid, database);
     const res = opened.structure[objectTypeField].find(x => x.pureName == pureName && x.schemaName == schemaName);
     return res;
