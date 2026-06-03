@@ -169,6 +169,8 @@ module.exports = {
     if (!connection) {
       throw new Error(`databaseConnections: Connection with conid="${conid}" not found`);
     }
+    // Handoff sessions are pinned to a single database; reject any other.
+    require('../utility/handoffSessions').assertDatabaseInScope(connection, database);
 
     if (connection.engine?.endsWith('@rest')) {
       return { isApiConnection: true };

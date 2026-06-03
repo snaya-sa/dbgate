@@ -123,6 +123,8 @@ module.exports = {
     await testConnectionPermission(conid, req);
     const sesid = crypto.randomUUID();
     const connection = await connections.getCore({ conid });
+    // Handoff sessions are pinned to a single database; reject any other.
+    require('../utility/handoffSessions').assertDatabaseInScope(connection, database);
     const subprocess = fork(
       global['API_PACKAGE'] || process.argv[1],
       [

@@ -63,6 +63,23 @@ function createSession({ label, engine, host, port, database, user, password, re
   return { conid, expiresAt: new Date(expiresAt).toISOString() };
 }
 
+/**
+ * A handoff connection is pinned to a single database (the token's `database`).
+ * Reject any DB operation that targets a different database on the same
+ * connection, so the per-project database scope holds even though the `database`
+ * parameter is client-controlled. No-op for non-handoff connections.
+ */
+function assertDatabaseInScope(connection, database) {
+  if (
+    connection?.isHandoffSession &&
+    database != null &&
+    database !== '' &&
+    database !== connection.defaultDatabase
+  ) {
+    throw new Error('DBGM-00000 Database not in handoff session scope');
+  }
+}
+
 function getSessionEntry(conid) {
   if (!conid) return null;
   const entry = sessions.get(conid);
@@ -166,6 +183,7 @@ module.exports = {
   registerSignature,
   getDefaultTtlSeconds,
   getReplayWindowMs,
+  assertDatabaseInScope,
   // exposed for tests
   _sweep: sweep,
 };
