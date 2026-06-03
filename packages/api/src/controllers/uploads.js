@@ -10,6 +10,14 @@ module.exports = {
     raw: true,
   },
   upload(req, res) {
+    // Handoff sessions are scoped to read-only DB browsing; they must not write
+    // to the shared uploads directory. This raw route is not covered by the
+    // permission allowlist (it runs no testStandardPermission check), so reject
+    // handoff tokens explicitly here.
+    if (req.user?.conid) {
+      res.status(403).json({ error: 'Not allowed for handoff session' });
+      return;
+    }
     const { data } = req.files || {};
     if (!data) {
       res.json(null);
