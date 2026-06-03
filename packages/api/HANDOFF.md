@@ -64,10 +64,20 @@ Idempotent. Returns `204`.
 
 ## How isolation & read-only work
 
-- **Scoping:** the access token's `conid` claim drives permissions
-  (`authProvider.getCurrentPermissions`): only the session's own connection is
-  listable/usable; every other connection and all admin/shell surfaces are
-  denied. Tampering with the token fails signature verification.
+- **Scoping:** the access token's `conid` claim drives a **default-deny
+  allowlist** (`authProvider.getCurrentPermissions`): `~*` denies everything,
+  then only the session connection plus the DB browse/query surface
+  (`dbops/*`, `widgets/database`, `widgets/opened-tabs`) are granted. Every
+  other connection and all instance-admin surfaces (plugin install, settings
+  changes, shell scripts, disk/file access, apps, archive write, admin) are
+  denied. The session-opening path (`sessions/create`) also calls
+  `testConnectionPermission`, and `checkCurrentConnectionPermission` is scoped
+  to the token's `conid`, so isolation holds in both storage and non-storage
+  modes. Tampering with the token fails signature verification.
+- **Token delivery:** the browser holds the access token **in memory only**
+  (never `localStorage`), so concurrent same-origin iframes stay isolated and
+  nothing persists after the iframe closes. A hard iframe reload loses the
+  token; the platform must re-open the iframe with a fresh `?token=`.
 - **Read-only:** the session connection carries `isReadOnly: true`, which reuses
   DbGate's existing server-side enforcement (`connectUtility`). For engines that
   support read-only sessions (postgres, mysql, oracle, sqlite) the DB session

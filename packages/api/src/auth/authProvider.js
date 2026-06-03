@@ -1,7 +1,7 @@
 const { getTokenSecret, getTokenLifetime } = require('./authCommon');
 const _ = require('lodash');
 const axios = require('axios');
-const { getLogger, getPredefinedPermissions } = require('dbgate-tools');
+const { getLogger } = require('dbgate-tools');
 
 const AD = require('activedirectory2').promiseWrapper;
 const jwt = require('jsonwebtoken');
@@ -44,7 +44,14 @@ class AuthProviderBase {
     // is treated as "allow all".
     const conid = req?.user?.conid ?? req?.auth?.conid;
     if (conid) {
-      return [...getPredefinedPermissions('logged-user'), '~connections/*', `connections/${conid}`];
+      // Default-deny allowlist for handoff tokens. testPermission treats an
+      // unmatched permission as ALLOWED, so the leading '~*' is required to make
+      // this a real allowlist. We then grant only the single session connection
+      // and the DB browse/query surface. Everything else — plugin install,
+      // settings changes, shell scripts, disk/file access, other connections,
+      // apps, archive write, admin — stays denied, so a handoff token cannot
+      // mutate the shared DbGate instance.
+      return ['~*', `connections/${conid}`, 'dbops/*', 'widgets/database', 'widgets/opened-tabs'];
     }
 
     const login = this.getCurrentLogin(req);
