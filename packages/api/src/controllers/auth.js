@@ -49,6 +49,8 @@ function authMiddleware(req, res, next) {
     '/config/get-settings',
     '/config/save-license-key',
     '/auth/oauth-token',
+    '/auth/handoff',
+    '/auth/handoff/revoke',
     '/auth/login',
     '/auth/redirect',
     '/redirect',

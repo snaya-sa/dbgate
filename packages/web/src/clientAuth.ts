@@ -43,6 +43,17 @@ export function handleOauthCallback() {
   const sentCode = params.get('code');
   const sid = params.get('sid');
 
+  // Handoff: the platform opens the iframe with ?token=<accessToken>. Adopt it as
+  // the access token (bypassing the login screen) and strip it from the URL so it
+  // isn't bookmarked or leaked via the referrer. Runs before config is fetched.
+  const handoffToken = params.get('token');
+  if (handoffToken) {
+    localStorage.setItem('accessToken', handoffToken);
+    params.delete('token');
+    const newSearch = params.toString();
+    window.history.replaceState({}, '', location.pathname + (newSearch ? `?${newSearch}` : '') + location.hash);
+  }
+
   if (isOauthCallback()) {
     const [_prefix, strmid, amoid] = sessionStorage.getItem('oauthState').split(':');
 

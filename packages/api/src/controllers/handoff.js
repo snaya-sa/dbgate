@@ -1,0 +1,168 @@
+const crypto = require('crypto');
+const jwt = require('jsonwebtoken');
+const express = require('express');
+const getExpressPath = require('../utility/getExpressPath');
+const { getLogger, extractErrorLogData } = require('dbgate-tools');
+const { getTokenSecret } = require('../auth/authCommon');
+const handoffSessions = require('../utility/handoffSessions');
+
+const logger = getLogger('handoff');
+
+function getHandoffSecret() {
+  return process.env.DBGATE_HANDOFF_SECRET;
+}
+
+/**
+ * Verifies the HMAC-SHA256 + timestamp scheme:
+ *   X-Handoff-Timestamp: <unix-ms>
+ *   X-Handoff-Signature: hex( HMAC-SHA256(secret, timestamp + "." + rawBody) )
+ * Returns { ok: true } or { ok: false, status, message }.
+ */
+function verifyHmac(req) {
+  const secret = getHandoffSecret();
+  if (!secret) {
+    return { ok: false, status: 503, message: 'Handoff not configured' };
+  }
+
+  const timestamp = req.headers['x-handoff-timestamp'];
+  const signature = req.headers['x-handoff-signature'];
+  if (!timestamp || !signature) {
+    return { ok: false, status: 401, message: 'Missing handoff authentication headers' };
+  }
+
+  const ts = parseInt(timestamp, 10);
+  if (!Number.isFinite(ts)) {
+    return { ok: false, status: 401, message: 'Invalid handoff timestamp' };
+  }
+  if (Math.abs(Date.now() - ts) > handoffSessions.getReplayWindowMs()) {
+    return { ok: false, status: 401, message: 'Handoff timestamp outside allowed window' };
+  }
+
+  // HMAC must be computed over the exact bytes received (captured by bodyParser verify hook).
+  const rawBody = req.rawBody || Buffer.from(JSON.stringify(req.body ?? {}));
+  const expected = crypto.createHmac('sha256', secret).update(`${timestamp}.`).update(rawBody).digest('hex');
+
+  const expectedBuf = Buffer.from(expected, 'hex');
+  let providedBuf;
+  try {
+    providedBuf = Buffer.from(String(signature), 'hex');
+  } catch (err) {
+    return { ok: false, status: 401, message: 'Invalid handoff signature' };
+  }
+  if (expectedBuf.length !== providedBuf.length || !crypto.timingSafeEqual(expectedBuf, providedBuf)) {
+    return { ok: false, status: 401, message: 'Invalid handoff signature' };
+  }
+
+  // Replay defense: reject a signature we have already accepted within the window.
+  if (!handoffSessions.registerSignature(expected)) {
+    return { ok: false, status: 401, message: 'Replayed handoff request' };
+  }
+
+  return { ok: true };
+}
+
+function handleHandoff(req, res) {
+  const auth = verifyHmac(req);
+  if (!auth.ok) {
+    logger.warn({ status: auth.status }, 'DBGM-00000 Rejected handoff request');
+    return res.status(auth.status).json({ error: auth.message });
+  }
+
+  const { label, engine, host, port, database, user, password, readonly, ttlSeconds } = req.body || {};
+
+  if (!engine || !host || !database) {
+    return res.status(400).json({ error: 'Missing required fields: engine, host, database' });
+  }
+
+  let session;
+  try {
+    session = handoffSessions.createSession({
+      label,
+      engine,
+      host,
+      port,
+      database,
+      user,
+      password,
+      readonly: readonly !== false, // default to read-only unless explicitly disabled
+      ttlSeconds,
+    });
+  } catch (err) {
+    logger.error(extractErrorLogData(err), 'DBGM-00000 Error creating handoff session');
+    return res.status(503).json({ error: 'Could not create handoff session' });
+  }
+
+  // The access token carries only the session reference + scope, never the password.
+  const ttlSecondsForToken = Math.max(1, Math.round((new Date(session.expiresAt).getTime() - Date.now()) / 1000));
+  const accessToken = jwt.sign(
+    {
+      conid: session.conid,
+      database,
+      readonly: readonly !== false,
+    },
+    getTokenSecret(),
+    { expiresIn: ttlSecondsForToken }
+  );
+
+  logger.info({ conid: session.conid }, 'DBGM-00000 Created handoff session');
+
+  return res.json({
+    accessToken,
+    conid: session.conid,
+    expiresAt: session.expiresAt,
+  });
+}
+
+function handleRevoke(req, res) {
+  const auth = verifyHmac(req);
+  if (!auth.ok) {
+    return res.status(auth.status).json({ error: auth.message });
+  }
+
+  const { conid } = req.body || {};
+  if (!conid) {
+    return res.status(400).json({ error: 'Missing conid' });
+  }
+
+  handoffSessions.revokeSession(conid);
+  logger.info({ conid }, 'DBGM-00000 Revoked handoff session');
+  return res.status(204).end();
+}
+
+/**
+ * Registers the server-to-server handoff routes. Called from the web/server
+ * bootstrap only (handoff is not used in the Electron desktop build).
+ *
+ * Refuses to boot on dangerous misconfiguration so the fork can never run with
+ * handoff enabled but authentication weakened.
+ */
+function registerHandoffRoutes(app) {
+  const secret = getHandoffSecret();
+
+  if (!secret) {
+    logger.warn('DBGM-00000 DBGATE_HANDOFF_SECRET not set; handoff endpoints are disabled');
+    return;
+  }
+  if (secret.length < 32) {
+    throw new Error('DBGATE_HANDOFF_SECRET must be at least 32 characters');
+  }
+  if (process.env.SKIP_ALL_AUTH) {
+    throw new Error('SKIP_ALL_AUTH must not be set when DBGATE_HANDOFF_SECRET is configured');
+  }
+  if (process.env.CONNECTIONS) {
+    logger.warn(
+      'DBGM-00000 CONNECTIONS is set alongside handoff; static connections should be unset for handoff-only deployments'
+    );
+  }
+
+  const router = express.Router();
+  router.post('/', handleHandoff);
+  router.post('/revoke', handleRevoke);
+  app.use(getExpressPath('/auth/handoff'), router);
+
+  logger.info('DBGM-00000 Handoff endpoints registered at /auth/handoff and /auth/handoff/revoke');
+}
+
+module.exports = {
+  registerHandoffRoutes,
+};

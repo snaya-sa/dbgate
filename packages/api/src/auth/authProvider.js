@@ -38,6 +38,15 @@ class AuthProviderBase {
   }
 
   async getCurrentPermissions(req) {
+    // Handoff session: derive permissions from the token claims. Grant access to
+    // the single session connection only, deny every other connection and all
+    // admin/shell surfaces. Returning a non-null set is essential — a null result
+    // is treated as "allow all".
+    const conid = req?.user?.conid ?? req?.auth?.conid;
+    if (conid) {
+      return [...getPredefinedPermissions('logged-user'), '~connections/*', `connections/${conid}`];
+    }
+
     const login = this.getCurrentLogin(req);
     const permissions = process.env[`LOGIN_PERMISSIONS_${login}`];
     return permissions || process.env.PERMISSIONS;
