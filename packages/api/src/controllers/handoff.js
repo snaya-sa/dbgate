@@ -8,8 +8,64 @@ const handoffSessions = require('../utility/handoffSessions');
 
 const logger = getLogger('handoff');
 
+// Plugin packages where a read-only handoff is actually enforced server-side:
+// postgres/mysql/sqlite open the DB session read-only, and mssql/duckdb advertise
+// readOnlySessions:false so the app layer blocks write/script execution. Oracle
+// advertises readOnlySessions:true but its driver does not honor isReadOnly, so a
+// read-only handoff would NOT block writes — fail closed for it and any engine not
+// verified here.
+const READONLY_ENFORCED_PACKAGES = new Set([
+  'dbgate-plugin-postgres',
+  'dbgate-plugin-mysql',
+  'dbgate-plugin-sqlite',
+  'dbgate-plugin-mssql',
+  'dbgate-plugin-duckdb',
+]);
+
+// Route prefixes a read-only DB-browse handoff session is allowed to reach. Any
+// other route (archive, scheduler, query-history, apps, cloud, team-files,
+// rest-connections, uploads, files, and the /runners/data//files/data static
+// mounts) is blocked for handoff tokens — they bypass or don't need the
+// permission allowlist and are not required for browsing one database.
+const HANDOFF_ALLOWED_ROUTE_PREFIXES = [
+  '/config',
+  '/auth',
+  '/connections',
+  '/server-connections',
+  '/database-connections',
+  '/sessions',
+  '/metadata',
+  '/jsldata',
+  '/plugins',
+  '/stream',
+  '/health',
+  '/__health',
+];
+
 function getHandoffSecret() {
   return process.env.DBGATE_HANDOFF_SECRET;
+}
+
+/**
+ * Express middleware: for requests authenticated with a handoff token (carrying a
+ * `conid` claim), allow only the route prefixes a read-only DB browse needs and
+ * reject everything else. This closes the class of raw/unchecked routes that the
+ * permission allowlist does not cover. No-op for non-handoff requests.
+ */
+function handoffRouteGuard(req, res, next) {
+  const conid = req?.user?.conid ?? req?.auth?.conid;
+  if (!conid) {
+    return next();
+  }
+  const allowed = HANDOFF_ALLOWED_ROUTE_PREFIXES.some(prefix => {
+    const full = getExpressPath(prefix);
+    return req.path === full || req.path.startsWith(`${full}/`);
+  });
+  if (!allowed) {
+    logger.warn({ path: req.path }, 'DBGM-00000 Blocked route for handoff session');
+    return res.status(403).json({ error: 'Not allowed for handoff session' });
+  }
+  return next();
 }
 
 /**
@@ -74,6 +130,18 @@ function handleHandoff(req, res) {
     return res.status(400).json({ error: 'Missing required fields: engine, host, database' });
   }
 
+  // Fail closed: only create a read-only session for engines whose driver
+  // actually enforces it, so the read-only guarantee is never silently false.
+  const isReadonly = readonly !== false;
+  if (isReadonly) {
+    const pkg = typeof engine === 'string' ? engine.split('@')[1] : null;
+    if (!READONLY_ENFORCED_PACKAGES.has(pkg)) {
+      return res.status(400).json({
+        error: `Read-only handoff is not supported for engine "${engine}" (read-only is not enforced server-side). Supported: postgres, mysql, sqlite, mssql, duckdb.`,
+      });
+    }
+  }
+
   let session;
   try {
     session = handoffSessions.createSession({
@@ -84,7 +152,7 @@ function handleHandoff(req, res) {
       database,
       user,
       password,
-      readonly: readonly !== false, // default to read-only unless explicitly disabled
+      readonly: isReadonly, // default to read-only unless explicitly disabled
       ttlSeconds,
     });
   } catch (err) {
@@ -98,7 +166,7 @@ function handleHandoff(req, res) {
     {
       conid: session.conid,
       database,
-      readonly: readonly !== false,
+      readonly: isReadonly,
     },
     getTokenSecret(),
     { expiresIn: ttlSecondsForToken }
@@ -149,6 +217,12 @@ function registerHandoffRoutes(app) {
   if (process.env.SKIP_ALL_AUTH) {
     throw new Error('SKIP_ALL_AUTH must not be set when DBGATE_HANDOFF_SECRET is configured');
   }
+  if (process.env.BASIC_AUTH) {
+    // express-basic-auth is installed before the HMAC routes and the Bearer
+    // middleware, so it would challenge /auth/handoff and the iframe's later
+    // token-authenticated requests before the handoff flow runs.
+    throw new Error('BASIC_AUTH must not be set when DBGATE_HANDOFF_SECRET is configured');
+  }
   if (process.env.CONNECTIONS) {
     logger.warn(
       'DBGM-00000 CONNECTIONS is set alongside handoff; static connections should be unset for handoff-only deployments'
@@ -165,4 +239,5 @@ function registerHandoffRoutes(app) {
 
 module.exports = {
   registerHandoffRoutes,
+  handoffRouteGuard,
 };

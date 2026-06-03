@@ -147,6 +147,9 @@ function start() {
 
   app.use(auth.authMiddleware);
 
+  // Restrict handoff-token requests to the routes a read-only DB browse needs.
+  app.use(require('./controllers/handoff').handoffRouteGuard);
+
   app.get(getExpressPath('/stream'), async function (req, res) {
     const strmid = req.query.strmid;
     res.set({

@@ -61,6 +61,7 @@ Idempotent. Returns `204`.
 | `HANDOFF_DEFAULT_TTL_SECONDS` | Default session TTL when the request omits `ttlSeconds`. Default `1800`. |
 | `CONNECTIONS` | Leave **unset** for handoff-only deployments. |
 | `SKIP_ALL_AUTH` | Must be **unset** — startup fails if it is set together with the handoff secret. |
+| `BASIC_AUTH` | Must be **unset** — it is installed before the handoff/Bearer middleware and would challenge the flow; startup fails if set together with the handoff secret. |
 
 ## How isolation & read-only work
 
@@ -79,10 +80,19 @@ Idempotent. Returns `204`.
   nothing persists after the iframe closes. A hard iframe reload loses the
   token; the platform must re-open the iframe with a fresh `?token=`.
 - **Read-only:** the session connection carries `isReadOnly: true`, which reuses
-  DbGate's existing server-side enforcement (`connectUtility`). For engines that
-  support read-only sessions (postgres, mysql, oracle, sqlite) the DB session
-  itself is opened read-only, so writes are rejected by the database — covering
-  the raw SQL console and any API path, not just the UI.
+  DbGate's existing server-side enforcement (`connectUtility`). A read-only
+  handoff is only accepted for engines that actually enforce it — postgres,
+  mysql, sqlite (DB session opened read-only) and mssql, duckdb (app-layer
+  write/script block). It is **rejected (400)** for engines that do not enforce
+  it server-side (e.g. oracle, whose driver ignores `isReadOnly`), so the
+  read-only guarantee is never silently false. For supported engines, writes are
+  rejected by the database/driver — covering the raw SQL console and any API
+  path, not just the UI.
+- **Route surface:** a route guard (`handoffRouteGuard`) restricts handoff-token
+  requests to the routes a read-only browse needs (config, auth, connections,
+  server-connections, database-connections, sessions, metadata, jsldata,
+  plugins) and 403s everything else, so write-capable or unchecked controllers
+  and the `/runners/data` //`/files/data` static mounts are unreachable.
 - **Lifetime:** the token `exp` is enforced on every request; a periodic sweep
   evicts expired sessions and kills their subprocess.
 
