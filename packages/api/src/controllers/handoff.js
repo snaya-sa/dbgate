@@ -27,13 +27,11 @@ const READONLY_ENFORCED_PACKAGES = new Set([
 // with testConnectionPermission + the read-only DB session, so writes are
 // already blocked and scoped to the token's own conid/database.
 const HANDOFF_ALLOWED_ROUTE_PREFIXES = [
-  '/config',
   '/auth',
   '/server-connections',
   '/database-connections',
   '/sessions',
   '/metadata',
-  '/plugins',
   '/stream',
   '/health',
   '/__health',
@@ -41,11 +39,23 @@ const HANDOFF_ALLOWED_ROUTE_PREFIXES = [
 
 // Mixed controllers: allow ONLY these specific read actions. Their other actions
 // write to shared server storage/files with no handoff-aware permission check
-// (e.g. connections/save writes the datastore; jsldata/save-text|save-rows write
-// files), so the controller cannot be prefix-allowed.
+// (connections/save writes the datastore; jsldata/save-text|save-rows write
+// files; config/delete-settings and config/start-trial mutate server config;
+// plugins/command runs ungated plugin code — install/uninstall/upgrade are
+// already gated by plugins/install), so the controllers cannot be prefix-allowed.
 const HANDOFF_ALLOWED_ROUTE_EXACT = [
   '/connections/list',
   '/connections/get',
+  '/config/get',
+  '/config/get-settings',
+  '/config/platform-info',
+  '/config/changelog',
+  '/config/update-settings',
+  '/plugins/script',
+  '/plugins/installed',
+  '/plugins/auth-types',
+  '/plugins/info',
+  '/plugins/search',
   '/jsldata/get-info',
   '/jsldata/get-rows',
   '/jsldata/exists',

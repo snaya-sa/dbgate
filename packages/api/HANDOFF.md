@@ -90,14 +90,15 @@ Idempotent. Returns `204`.
   path, not just the UI.
 - **Route surface:** a route guard (`handoffRouteGuard`) restricts handoff-token
   requests to the routes a read-only browse needs and 403s everything else. The
-  DB controllers (config, auth, server-connections, database-connections,
-  sessions, metadata, plugins) are allowed in full since every action is
-  permission-checked and DB-scoped. The mixed controllers `connections` and
-  `jsldata` are limited to specific **read** actions (list/get, and the
-  jsldata get/stream/stats actions) because their other actions write server
-  storage/files without a handoff-aware check. Write-capable or unchecked
-  controllers and the `/runners/data` + `/files/data` static mounts are
-  unreachable.
+  DB controllers (auth, server-connections, database-connections, sessions,
+  metadata) are allowed in full since every action is DB-scoped and
+  permission-checked (writes blocked by the read-only session). The mixed
+  controllers `connections`, `config`, `plugins` and `jsldata` are limited to
+  specific **read** actions, because their other actions write shared server
+  storage/files without a handoff-aware check (e.g. `connections/save`,
+  `config/delete-settings`, `config/start-trial`, `jsldata/save-rows`,
+  `plugins/command`). Write-capable or unchecked controllers and the
+  `/runners/data` + `/files/data` static mounts are unreachable.
 - **Lifetime:** the token `exp` is enforced on every request; a periodic sweep
   evicts expired sessions and kills their subprocess.
 
