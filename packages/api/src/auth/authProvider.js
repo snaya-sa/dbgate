@@ -53,6 +53,14 @@ class AuthProviderBase {
   }
 
   async checkCurrentConnectionPermission(req, conid) {
+    // Handoff token: scope strictly to the session's own connection. This is the
+    // connection-permission check used in STORAGE_DATABASE mode (where the
+    // connections/<conid> allow/deny list is not consulted); without this a
+    // handoff token could reach another saved connection by id.
+    const sessionConid = req?.user?.conid ?? req?.auth?.conid;
+    if (sessionConid) {
+      return conid == sessionConid;
+    }
     return true;
   }
 
