@@ -22,25 +22,42 @@ const READONLY_ENFORCED_PACKAGES = new Set([
   'dbgate-plugin-duckdb',
 ]);
 
-// Route prefixes a read-only DB-browse handoff session is allowed to reach. Any
-// other route (archive, scheduler, query-history, apps, cloud, team-files,
-// rest-connections, uploads, files, and the /runners/data//files/data static
-// mounts) is blocked for handoff tokens — they bypass or don't need the
-// permission allowlist and are not required for browsing one database.
+// Route prefixes a read-only DB-browse handoff session may reach in full. These
+// controllers operate on the session connection/database and gate every action
+// with testConnectionPermission + the read-only DB session, so writes are
+// already blocked and scoped to the token's own conid/database.
 const HANDOFF_ALLOWED_ROUTE_PREFIXES = [
   '/config',
   '/auth',
-  '/connections',
   '/server-connections',
   '/database-connections',
   '/sessions',
   '/metadata',
-  '/jsldata',
   '/plugins',
   '/stream',
   '/health',
   '/__health',
 ];
+
+// Mixed controllers: allow ONLY these specific read actions. Their other actions
+// write to shared server storage/files with no handoff-aware permission check
+// (e.g. connections/save writes the datastore; jsldata/save-text|save-rows write
+// files), so the controller cannot be prefix-allowed.
+const HANDOFF_ALLOWED_ROUTE_EXACT = [
+  '/connections/list',
+  '/connections/get',
+  '/jsldata/get-info',
+  '/jsldata/get-rows',
+  '/jsldata/exists',
+  '/jsldata/stream-rows',
+  '/jsldata/get-stats',
+  '/jsldata/load-field-values',
+  '/jsldata/extract-timeline-chart',
+];
+
+// Everything else (archive, scheduler, query-history, apps, cloud, team-files,
+// rest-connections, uploads, files, the connections/jsldata write actions, and
+// the /runners/data + /files/data static mounts) is blocked for handoff tokens.
 
 function getHandoffSecret() {
   return process.env.DBGATE_HANDOFF_SECRET;
@@ -57,11 +74,12 @@ function handoffRouteGuard(req, res, next) {
   if (!conid) {
     return next();
   }
-  const allowed = HANDOFF_ALLOWED_ROUTE_PREFIXES.some(prefix => {
+  const allowedByPrefix = HANDOFF_ALLOWED_ROUTE_PREFIXES.some(prefix => {
     const full = getExpressPath(prefix);
     return req.path === full || req.path.startsWith(`${full}/`);
   });
-  if (!allowed) {
+  const allowedByExact = HANDOFF_ALLOWED_ROUTE_EXACT.some(action => req.path === getExpressPath(action));
+  if (!allowedByPrefix && !allowedByExact) {
     logger.warn({ path: req.path }, 'DBGM-00000 Blocked route for handoff session');
     return res.status(403).json({ error: 'Not allowed for handoff session' });
   }
