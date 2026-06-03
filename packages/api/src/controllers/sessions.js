@@ -12,7 +12,7 @@ const { getLogger, extractErrorLogData, removeSqlFrontMatter } = require('dbgate
 const pipeForkLogs = require('../utility/pipeForkLogs');
 const config = require('./config');
 const { sendToAuditLog } = require('../utility/auditlog');
-const { testStandardPermission, testDatabaseRolePermission } = require('../utility/hasPermission');
+const { testStandardPermission, testDatabaseRolePermission, testConnectionPermission } = require('../utility/hasPermission');
 const { getStaticTokenSecret } = require('../auth/authCommon');
 const jwt = require('jsonwebtoken');
 
@@ -116,7 +116,11 @@ module.exports = {
   handle_ping() {},
 
   create_meta: true,
-  async create({ conid, database }) {
+  async create({ conid, database }, req) {
+    // Enforce connection scoping before opening a session subprocess. Without
+    // this a token could open a SQL session for any conid it knows, bypassing
+    // the single-connection handoff scope.
+    await testConnectionPermission(conid, req);
     const sesid = crypto.randomUUID();
     const connection = await connections.getCore({ conid });
     const subprocess = fork(
@@ -242,8 +246,8 @@ module.exports = {
   },
 
   executeReader_meta: true,
-  async executeReader({ conid, database, sql, queryName, appFolder }) {
-    const { sesid } = await this.create({ conid, database });
+  async executeReader({ conid, database, sql, queryName, appFolder }, req) {
+    const { sesid } = await this.create({ conid, database }, req);
     const session = this.opened.find(x => x.sesid == sesid);
     session.killOnDone = true;
     const jslid = crypto.randomUUID();
