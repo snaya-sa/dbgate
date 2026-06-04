@@ -1,0 +1,80 @@
+name: Docker image (GHCR fork)
+
+# Builds the community image from this fork (incl. handoff) and pushes it to
+# ghcr.io/snaya-sa/dbgate on every push to master, tagged :latest and
+# :master-<short-sha>. Deploys are GitOps-manual: bump the pinned tag in
+# k3s-oci (src/apps/dbgate/deployment.yml) to roll forward — nothing here
+# auto-updates the running cluster. Can also be run by hand from the Actions tab.
+on:
+  push:
+    branches:
+      - master
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Extra image tag to publish (besides latest + the commit sha)'
+        required: false
+        default: ''
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  build:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Docker meta
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/snaya-sa/dbgate
+          flavor: |
+            latest=false
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=master-,format=short
+            type=raw,value=${{ github.event.inputs.tag }},enable=${{ github.event.inputs.tag != '' }}
+
+      - name: Use Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+
+      - name: adjustPackageJson
+        run: node adjustPackageJson --community
+
+      - name: yarn install
+        run: yarn install
+
+      - name: setCurrentVersion
+        run: yarn setCurrentVersion
+
+      - name: Prepare docker image
+        run: yarn run prepare:docker
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Login to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push
+        uses: docker/build-push-action@v5
+        with:
+          push: true
+          context: ./docker
+          tags: ${{ steps.meta.outputs.tags }}
+          # OCI Ampere is arm64; most x86 nodes are amd64. Build both.
+          platforms: linux/amd64,linux/arm64
