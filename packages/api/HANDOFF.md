@@ -1,9 +1,10 @@
 # Handoff sessions (platform integration)
 
-This fork supports **per-user, per-project, isolated** database sessions pushed
-to a single shared DbGate instance by a trusted platform backend. DbGate never
-reads secret stores or Kubernetes itself — the platform resolves the connection
-(host + credentials) and pushes it server-to-server.
+This fork supports **per-user, per-connection, isolated** database sessions pushed
+to a single shared DbGate instance by a trusted platform backend. Each session is
+scoped to exactly one connection (and may browse every database that connection
+can reach). DbGate never reads secret stores or Kubernetes itself — the platform
+resolves the connection (host + credentials) and pushes it server-to-server.
 
 ## Endpoints
 
@@ -30,7 +31,8 @@ Body:
   "engine": "postgres@dbgate-plugin-postgres",
   "host": "acme-db-ro.acme-ns.svc.cluster.local",
   "port": 5432,
-  "database": "acme",
+  "database": "acme",     // optional: the database the iframe auto-opens; the
+                          // session can browse ALL databases on this connection
   "user": "readonly_user",
   "password": "••••••",   // server-to-server only; never logged or persisted
   "readonly": true,        // defaults to true if omitted
@@ -47,6 +49,12 @@ Response:
 The connection (including the password) is stored only in process memory. The
 access token carries `{ conid, database, readonly, exp }` — never the password.
 Open the iframe at `https://dbgate.internal/?token=<accessToken>`.
+
+**Scope is the connection, not a single database.** A handoff session is bound to
+exactly one connection and may browse every database that connection's
+credentials can reach; `database` only selects which one the iframe opens first.
+Bound what's visible by giving the platform-resolved connection a DB user scoped
+to just the databases that user should see (e.g. one DB role per tenant).
 
 ### `POST /auth/handoff/revoke`
 

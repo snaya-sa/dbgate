@@ -174,8 +174,11 @@ function handleHandoff(req, res) {
 
   const { label, engine, host, port, database, user, password, readonly, ttlSeconds } = req.body || {};
 
-  if (!engine || !host || !database) {
-    return res.status(400).json({ error: 'Missing required fields: engine, host, database' });
+  // `database` is optional: the handoff scope is the whole connection (every
+  // database the credentials can reach). When provided, it is only the database
+  // the iframe auto-opens.
+  if (!engine || !host) {
+    return res.status(400).json({ error: 'Missing required fields: engine, host' });
   }
 
   // Fail closed: only create a read-only session for engines whose driver

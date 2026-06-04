@@ -3,7 +3,7 @@ import localforage from 'localforage';
 import type { ExtensionsDirectory } from 'dbgate-types';
 import invalidateCommands from './commands/invalidateCommands';
 import getElectron from './utility/getElectron';
-import { getSettings, useConfig, useSettings } from './utility/metadataLoaders';
+import { getConnectionList, getSettings, useConfig, useSettings } from './utility/metadataLoaders';
 import _ from 'lodash';
 import { safeJsonParse } from 'dbgate-tools';
 import { apiCall } from './utility/api';
@@ -387,6 +387,22 @@ export function subscribeApiDependendStores() {
       switchCurrentDatabase(value.singleDbConnection);
     }
   });
+
+  // Handoff session: the platform pushed exactly one connection. Open and expand
+  // it so its databases are visible immediately, and auto-open the default
+  // database (the optional `database` from the handoff request) so the embedded
+  // user lands directly in it instead of having to click the connection first.
+  if (isHandoffSession()) {
+    getConnectionList().then(conns => {
+      const conn = (conns || [])[0];
+      if (!conn) return;
+      openedConnections.update(x => _.uniq([...x, conn._id]));
+      expandedConnections.update(x => _.uniq([...x, conn._id]));
+      if (conn.defaultDatabase) {
+        switchCurrentDatabase({ connection: conn, name: conn.defaultDatabase });
+      }
+    });
+  }
 }
 
 let currentArchiveValue = null;

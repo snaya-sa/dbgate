@@ -48,8 +48,11 @@ function createSession({ label, engine, host, port, database, user, password, re
     port: port != null ? `${port}` : undefined,
     user,
     password,
-    defaultDatabase: database,
-    singleDatabase: !!database,
+    // The handoff scope is the whole connection: every database on it is
+    // browsable (bounded by the connection's own DB credentials). `database`, if
+    // given, is only a default to auto-open — not a hard scope. So the connection
+    // is NOT singleDatabase; it lists all its databases like a normal connection.
+    defaultDatabase: database || undefined,
     // Reuses DbGate's built-in server-side read-only enforcement (connectUtility
     // + read-only DB session for engines that support it). See connectUtility.js.
     isReadOnly: !!readonly,
@@ -64,20 +67,14 @@ function createSession({ label, engine, host, port, database, user, password, re
 }
 
 /**
- * A handoff connection is pinned to a single database (the token's `database`).
- * Reject any DB operation that targets a different database on the same
- * connection, so the per-project database scope holds even though the `database`
- * parameter is client-controlled. No-op for non-handoff connections.
+ * Handoff scope is the connection, not a single database: a handoff session may
+ * open any database reachable by the connection's credentials. Connection-level
+ * isolation (one session = one connection) is enforced by testConnectionPermission
+ * / checkCurrentConnectionPermission on the conid. Kept as a no-op so the existing
+ * call sites stay in place if per-database scoping is ever reintroduced.
  */
 function assertDatabaseInScope(connection, database) {
-  if (
-    connection?.isHandoffSession &&
-    database != null &&
-    database !== '' &&
-    database !== connection.defaultDatabase
-  ) {
-    throw new Error('DBGM-00000 Database not in handoff session scope');
-  }
+  // intentionally no per-database restriction; see doc comment above
 }
 
 function getSessionEntry(conid) {
