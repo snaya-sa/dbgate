@@ -66,6 +66,8 @@ const favoritesLoader = () => ({
   url: 'files/favorites',
   params: {},
   reloadTrigger: { key: 'files-changed-favorites' },
+  // Handoff sessions are blocked from /files; fall back to an empty list.
+  errorValue: [],
 });
 
 // const sqlObjectListLoader = ({ conid, database }) => ({
@@ -151,6 +153,10 @@ const allAppsLoader = () => ({
   url: 'apps/get-all-apps',
   params: {},
   reloadTrigger: { key: `files-changed`, folder: 'apps' },
+  // Handoff sessions are blocked from /apps; fall back to an empty list so the
+  // app still initializes (loadApi requires apps to be non-null) instead of
+  // looping on "API not initialized".
+  errorValue: [],
 });
 
 const serverStatusLoader = () => ({
@@ -236,8 +242,11 @@ async function getCore(loader, args) {
 
   async function doLoad() {
     const resp = await apiCall(url, params);
-    if (resp?.errorMessage && errorValue !== undefined) {
-      if (onError) onError(resp.errorMessage);
+    // resp == null covers a route blocked for the session (apiCall returns null
+    // on a guard 403) as well as a disabled API; use the loader's errorValue
+    // fallback when one is defined.
+    if ((resp?.errorMessage || resp == null) && errorValue !== undefined) {
+      if (onError) onError(resp?.errorMessage);
       if (onLoaded) onLoaded(errorValue);
       return errorValue;
     }
