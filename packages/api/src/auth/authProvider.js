@@ -1,7 +1,7 @@
 const { getTokenSecret, getTokenLifetime } = require('./authCommon');
 const _ = require('lodash');
 const axios = require('axios');
-const { getLogger, getPredefinedPermissions } = require('dbgate-tools');
+const { getLogger } = require('dbgate-tools');
 
 const AD = require('activedirectory2').promiseWrapper;
 const jwt = require('jsonwebtoken');
@@ -38,16 +38,57 @@ class AuthProviderBase {
   }
 
   async getCurrentPermissions(req) {
+    // Handoff session: derive permissions from the token claims. Grant access to
+    // the single session connection only, deny every other connection and all
+    // admin/shell surfaces. Returning a non-null set is essential — a null result
+    // is treated as "allow all".
+    const conid = req?.user?.conid ?? req?.auth?.conid;
+    if (conid) {
+      // Default-deny allowlist for handoff tokens. testPermission treats an
+      // unmatched permission as ALLOWED, so the leading '~*' is required to make
+      // this a real allowlist. We then grant only the single session connection
+      // and the DB browse/query surface. Everything else — plugin install,
+      // settings changes, shell scripts, disk/file access, other connections,
+      // apps, archive write, admin — stays denied, so a handoff token cannot
+      // mutate the shared DbGate instance.
+      return ['~*', `connections/${conid}`, 'dbops/*', 'widgets/database', 'widgets/opened-tabs'];
+    }
+
     const login = this.getCurrentLogin(req);
     const permissions = process.env[`LOGIN_PERMISSIONS_${login}`];
     return permissions || process.env.PERMISSIONS;
   }
 
   async checkCurrentConnectionPermission(req, conid) {
+    // Handoff token: scope strictly to the session's own connection. This is the
+    // connection-permission check used in STORAGE_DATABASE mode (where the
+    // connections/<conid> allow/deny list is not consulted); without this a
+    // handoff token could reach another saved connection by id.
+    const sessionConid = req?.user?.conid ?? req?.auth?.conid;
+    if (sessionConid) {
+      return conid == sessionConid;
+    }
     return true;
   }
 
   async getCurrentDatabasePermissions(req) {
+    // Handoff session: in STORAGE_DATABASE mode the SQL editor path checks the
+    // run_script database role. Grant it for every database on the session's
+    // connection (the handoff scope is the connection, not a single database) so
+    // queries work; writes remain blocked by the read-only DB session (isReadOnly),
+    // not by the role. Omitting database_names_list makes the row match all
+    // databases on the conid (see matchDatabasePermissionRow). Isolation to the
+    // single connection is enforced separately by checkCurrentConnectionPermission.
+    // (No-op outside STORAGE_DATABASE mode.)
+    const conid = req?.user?.conid ?? req?.auth?.conid;
+    if (conid) {
+      return [
+        {
+          connection_conid: conid,
+          database_permission_role_id: -4, // run_script
+        },
+      ];
+    }
     return [];
   }
 

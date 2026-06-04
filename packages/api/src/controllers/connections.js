@@ -21,6 +21,7 @@ const {
 } = require('../utility/hasPermission');
 const pipeForkLogs = require('../utility/pipeForkLogs');
 const requireEngineDriver = require('../utility/requireEngineDriver');
+const handoffSessions = require('../utility/handoffSessions');
 const { getAuthProviderById } = require('../auth/authProvider');
 const { startTokenChecking } = require('../utility/authProxy');
 const { extractConnectionsFromEnv } = require('../utility/envtools');
@@ -197,6 +198,14 @@ module.exports = {
 
   list_meta: true,
   async list(_params, req) {
+    // Handoff session: expose only the session's own connection (masked), and
+    // nothing else — regardless of any static/portal/datastore connections.
+    const handoffConid = req?.user?.conid;
+    if (handoffConid) {
+      const conn = handoffSessions.getConnection(handoffConid);
+      return conn ? [maskConnection(conn)] : [];
+    }
+
     const storage = require('./storage');
     const loadedPermissions = await loadPermissionsFromRequest(req);
 
@@ -468,6 +477,15 @@ module.exports = {
 
   async getCore({ conid, mask = false }) {
     if (!conid) return null;
+
+    // Handoff sessions: the connection (incl. password) lives only in the
+    // in-memory session map. Return it unmasked for the connect path so the
+    // password reaches the DB subprocess in memory; mask it otherwise.
+    const handoffConnection = handoffSessions.getConnection(conid);
+    if (handoffConnection) {
+      return mask ? maskConnection(handoffConnection) : handoffConnection;
+    }
+
     const volatile = volatileConnections[conid];
     if (volatile) {
       return volatile;

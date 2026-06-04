@@ -3,11 +3,12 @@ import localforage from 'localforage';
 import type { ExtensionsDirectory } from 'dbgate-types';
 import invalidateCommands from './commands/invalidateCommands';
 import getElectron from './utility/getElectron';
-import { getSettings, useConfig, useSettings } from './utility/metadataLoaders';
+import { getConnectionList, getSettings, useConfig, useSettings } from './utility/metadataLoaders';
 import _ from 'lodash';
 import { safeJsonParse } from 'dbgate-tools';
 import { apiCall } from './utility/api';
 import { getOpenedTabsStorageName, isAdminPage } from './utility/pageDefs';
+import { isHandoffSession } from './utility/resolveApi';
 import { switchCurrentDatabase } from './utility/common';
 import { tick } from 'svelte';
 
@@ -28,6 +29,13 @@ export interface TabDefinition {
 }
 
 export function writableWithStorage<T>(defaultValue: T, storageName, removeCondition?: (value: T) => boolean) {
+  if (isHandoffSession()) {
+    // Handoff sessions are ephemeral: never read or write persisted workspace
+    // state. Keeps each session isolated from other same-origin sessions and
+    // avoids restoring state (open tabs, expanded tree, current database) that
+    // points at a previous handoff session's now-dead connection id.
+    return writable<T>(defaultValue);
+  }
   const init = localStorage.getItem(storageName);
   const res = writable<T>(init ? safeJsonParse(init, defaultValue, true) : defaultValue);
   res.subscribe(value => {
@@ -41,6 +49,12 @@ export function writableWithStorage<T>(defaultValue: T, storageName, removeCondi
 }
 
 export function writableWithForage<T>(defaultValue: T, storageName, safeConvertor?) {
+  if (isHandoffSession()) {
+    // Ephemeral for handoff sessions — see writableWithStorage. This is what
+    // keeps openedTabs from restoring a previous session's tabs (and polling its
+    // dead conid).
+    return writable<T>(defaultValue);
+  }
   const res = writable<T>(defaultValue);
   res.subscribe(value => {
     localforage.setItem(storageName, value);
@@ -373,6 +387,22 @@ export function subscribeApiDependendStores() {
       switchCurrentDatabase(value.singleDbConnection);
     }
   });
+
+  // Handoff session: the platform pushed exactly one connection. Open and expand
+  // it so its databases are visible immediately, and auto-open the default
+  // database (the optional `database` from the handoff request) so the embedded
+  // user lands directly in it instead of having to click the connection first.
+  if (isHandoffSession()) {
+    getConnectionList().then(conns => {
+      const conn = (conns || [])[0];
+      if (!conn) return;
+      openedConnections.update(x => _.uniq([...x, conn._id]));
+      expandedConnections.update(x => _.uniq([...x, conn._id]));
+      if (conn.defaultDatabase) {
+        switchCurrentDatabase({ connection: conn, name: conn.defaultDatabase });
+      }
+    });
+  }
 }
 
 let currentArchiveValue = null;
@@ -477,14 +507,13 @@ export const getCloudSigninTokenHolder = () => cloudSigninTokenHolderValue;
 export const toggledDatabases = derived([extensions, useSettings()], ([$extensions, $settings]) => {
   const res = new Map<string, boolean>();
 
-  if (!$extensions?.drivers || !$settings)
-    return res;
+  if (!$extensions?.drivers || !$settings) return res;
 
   const hiddenEngines = $settings['hiddenDatabaseEngines'] || [];
 
   for (const driver of $extensions.drivers) {
     res.set(driver.title, !hiddenEngines.includes(driver.engine));
   }
-  
+
   return res;
 });

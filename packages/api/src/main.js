@@ -133,7 +133,10 @@ function start() {
   } else if (processArgs.runE2eTests) {
     registerExpressStatic(app, path.resolve('packer/build/public'));
   } else if (platformInfo.isNpmDist) {
-    registerExpressStatic(app, path.join(__dirname, isProApp() ? '../../dbgate-web-premium/public' : '../../dbgate-web/public'));
+    registerExpressStatic(
+      app,
+      path.join(__dirname, isProApp() ? '../../dbgate-web-premium/public' : '../../dbgate-web/public')
+    );
   } else if (process.env.DEVWEB) {
     registerExpressStatic(app, path.join(__dirname, '../../web/public'));
   } else {
@@ -143,6 +146,9 @@ function start() {
   }
 
   app.use(auth.authMiddleware);
+
+  // Restrict handoff-token requests to the routes a read-only DB browse needs.
+  app.use(require('./controllers/handoff').handoffRouteGuard);
 
   app.get(getExpressPath('/stream'), async function (req, res) {
     const strmid = req.query.strmid;
@@ -174,7 +180,16 @@ function start() {
     res.end(JSON.stringify(health, null, 2));
   });
 
-  app.use(bodyParser.json({ limit: '50mb' }));
+  app.use(
+    bodyParser.json({
+      limit: '50mb',
+      // Capture the exact request bytes so the handoff endpoints can verify the
+      // HMAC signature over the raw body.
+      verify: (req, _res, buf) => {
+        req.rawBody = buf;
+      },
+    })
+  );
 
   app.use(
     getExpressPath('/uploads'),
@@ -184,6 +199,9 @@ function start() {
   );
 
   useAllControllers(app, null);
+
+  // Server-to-server handoff endpoints (HMAC-authenticated, no Bearer token).
+  require('./controllers/handoff').registerHandoffRoutes(app);
 
   // if (process.env.PAGES_DIRECTORY) {
   //   app.use('/pages', express.static(process.env.PAGES_DIRECTORY));

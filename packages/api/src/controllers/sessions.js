@@ -12,7 +12,7 @@ const { getLogger, extractErrorLogData, removeSqlFrontMatter } = require('dbgate
 const pipeForkLogs = require('../utility/pipeForkLogs');
 const config = require('./config');
 const { sendToAuditLog } = require('../utility/auditlog');
-const { testStandardPermission, testDatabaseRolePermission } = require('../utility/hasPermission');
+const { testStandardPermission, testDatabaseRolePermission, testConnectionPermission } = require('../utility/hasPermission');
 const { getStaticTokenSecret } = require('../auth/authCommon');
 const jwt = require('jsonwebtoken');
 
@@ -116,9 +116,15 @@ module.exports = {
   handle_ping() {},
 
   create_meta: true,
-  async create({ conid, database }) {
+  async create({ conid, database }, req) {
+    // Enforce connection scoping before opening a session subprocess. Without
+    // this a token could open a SQL session for any conid it knows, bypassing
+    // the single-connection handoff scope.
+    await testConnectionPermission(conid, req);
     const sesid = crypto.randomUUID();
     const connection = await connections.getCore({ conid });
+    // Handoff sessions are pinned to a single database; reject any other.
+    require('../utility/handoffSessions').assertDatabaseInScope(connection, database);
     const subprocess = fork(
       global['API_PACKAGE'] || process.argv[1],
       [
@@ -242,8 +248,8 @@ module.exports = {
   },
 
   executeReader_meta: true,
-  async executeReader({ conid, database, sql, queryName, appFolder }) {
-    const { sesid } = await this.create({ conid, database });
+  async executeReader({ conid, database, sql, queryName, appFolder }, req) {
+    const { sesid } = await this.create({ conid, database }, req);
     const session = this.opened.find(x => x.sesid == sesid);
     session.killOnDone = true;
     const jslid = crypto.randomUUID();
@@ -298,6 +304,20 @@ module.exports = {
   //   session.subprocess.send({ msgtype: 'cancel' });
   //   return { state: 'ok' };
   // },
+
+  // Kill all SQL sessions opened for a connection. Used when a handoff session is
+  // revoked or expires so a still-valid token cannot keep querying the old
+  // subprocess. Killing triggers the 'exit' handler, which removes it from opened.
+  closeForConid(conid) {
+    for (const session of this.opened.filter(x => x.conid == conid)) {
+      try {
+        session.subprocess.kill();
+      } catch (err) {
+        logger.error(extractErrorLogData(err), 'DBGM-00000 Error killing session subprocess on revoke');
+      }
+    }
+    this.opened = this.opened.filter(x => x.conid != conid);
+  },
 
   kill_meta: true,
   async kill({ sesid }) {

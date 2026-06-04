@@ -213,6 +213,16 @@ export async function apiCall(
     }
 
     const json = await resp.json();
+
+    // A server-side route guard (e.g. handoff sessions) rejects blocked routes
+    // with 403 and a bare { error } body. Degrade gracefully: return null so
+    // data-loaders that expect arrays/objects don't receive the error body and
+    // crash (e.g. apps.filter / favorites.filter). Permission denials that use
+    // { apiErrorMessage } still flow through processApiResponse below.
+    if (resp.status == 403 && json && json.error && json.apiErrorMessage == null) {
+      return null;
+    }
+
     return await processApiResponse(route, args, json);
   }
 }

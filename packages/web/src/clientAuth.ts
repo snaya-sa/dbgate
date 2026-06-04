@@ -1,4 +1,5 @@
 import { apiCall, enableApi, getAuthCategory } from './utility/api';
+import { setVolatileAccessToken, getVolatileAccessToken } from './utility/resolveApi';
 import { getConfig } from './utility/metadataLoaders';
 import { isAdminPage } from './utility/pageDefs';
 import getElectron from './utility/getElectron';
@@ -42,6 +43,20 @@ export function handleOauthCallback() {
   const params = new URLSearchParams(location.search);
   const sentCode = params.get('code');
   const sid = params.get('sid');
+
+  // Handoff: the platform opens the iframe with ?token=<accessToken>. Hold it in
+  // memory only (not localStorage) so concurrent same-origin iframes stay
+  // isolated and nothing persists after the iframe closes, then strip it from the
+  // URL so it isn't bookmarked or leaked via the referrer. Runs before config is
+  // fetched. On a hard iframe reload the in-memory token is lost and the platform
+  // must re-open the iframe with a fresh token.
+  const handoffToken = params.get('token');
+  if (handoffToken) {
+    setVolatileAccessToken(handoffToken);
+    params.delete('token');
+    const newSearch = params.toString();
+    window.history.replaceState({}, '', location.pathname + (newSearch ? `?${newSearch}` : '') + location.hash);
+  }
 
   if (isOauthCallback()) {
     const [_prefix, strmid, amoid] = sessionStorage.getItem('oauthState').split(':');
@@ -178,7 +193,7 @@ export async function handleAuthOnStartup(config) {
     }
 
     if (getAuthCategory(config) == 'token') {
-      if (!config.isInvalidToken && localStorage.getItem('accessToken')) {
+      if (!config.isInvalidToken && (getVolatileAccessToken() || localStorage.getItem('accessToken'))) {
         return false;
       }
 
