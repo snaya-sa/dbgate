@@ -1,4 +1,4 @@
-FROM node:22
+FROM node:22.23.4
 
 LABEL org.opencontainers.image.source="https://github.com/dbgate/dbgate"
 

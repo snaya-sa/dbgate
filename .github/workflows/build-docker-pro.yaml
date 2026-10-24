@@ -34,10 +34,10 @@ jobs:
 
             type=match,pattern=\d+.\d+.\d+,enable=${{ !contains(github.ref_name, '-docker.') && !contains(github.ref_name, '-beta.') }}
             type=raw,value=latest,enable=${{ !contains(github.ref_name, '-docker.') && !contains(github.ref_name, '-beta.') }}
-      - name: Use Node.js 22.x
+      - name: Use Node.js 22.23.4
         uses: actions/setup-node@v1
         with:
-          node-version: 22.x
+          node-version: 22.23.4
       - name: Checkout dbgate/dbgate-pro
         uses: actions/checkout@v2
         with:
